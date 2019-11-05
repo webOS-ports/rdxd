@@ -1,4 +1,4 @@
-// Copyright (c) 2008-2018 LG Electronics, Inc.
+// Copyright (c) 2008-2019 LG Electronics, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -105,7 +105,7 @@ new_report_spec(const char *path)
 
 	ReportSpec_t *spec = g_new0(ReportSpec_t , 1);
 
-	fp = fopen(path, "r");
+	fp = fopen(path, "r+");
 
         if (!fp)
         {
@@ -114,8 +114,10 @@ new_report_spec(const char *path)
                 return spec;
         }
 
+	int fd = fileno(fp);
+
         // read meta data.
-	if (stat(path, &file_stat))
+	if (fstat(fd, &file_stat) == -1)
 	{
 		LOG_RDXD_WARNING(MSGID_STAT_ERR, 2,
 		                 PMLOGKS(PATH, path), PMLOGKFV(ERRCODE, "%d", errno), ""); // 'n' not used
@@ -171,9 +173,9 @@ new_report_spec(const char *path)
 
 	metadata_str[n] = 0;
 
-	n = truncate(path, file_stat.st_size - len - sizeof(size_t));
+	n = ftruncate(fd, file_stat.st_size - len - sizeof(size_t));
 
-	if (n)
+	if (n < 0)
 	{
 		LOG_RDXD_WARNING(MSGID_FILE_TRUNCATE_ERR, 0,
 		                 "failed to truncate file from size=%zd to size=%zd\n",
@@ -324,7 +326,12 @@ report(const char *trigger_filename, GError **error)
 		}
 
 		if (g_file_test(CRASH_COMPONENT_FILE, G_FILE_TEST_EXISTS))
-			g_remove(CRASH_COMPONENT_FILE);
+		{
+			if (g_remove(CRASH_COMPONENT_FILE) != 0)
+			{
+				LOG_RDXD_DEBUG("%s: g_remove failed for %s", __func__, CRASH_COMPONENT_FILE);
+			}
+		}
 
 		fp = fopen(CRASH_COMPONENT_FILE, "w");
 		if (fp)
@@ -479,7 +486,7 @@ handle_new_crash(GIOChannel *source, GIOCondition condition, gpointer data)
 			return true;
 		}
 
-		if (status == G_IO_STATUS_ERROR)
+		if (status == G_IO_STATUS_ERROR && NULL != err)
 		{
 			LOG_RDXD_WARNING(MSGID_INOTIFY_EVENT_READ_ERR, 1, PMLOGKS(ERRTEXT, err->message),
 			                 "error reading inotify event");
@@ -499,7 +506,7 @@ handle_new_crash(GIOChannel *source, GIOCondition condition, gpointer data)
 
 			status = g_io_channel_read_chars(source, name, event.len, &size, &err);
 
-			if (status == G_IO_STATUS_ERROR)
+			if (status == G_IO_STATUS_ERROR && NULL != err)
 			{
 				LOG_RDXD_WARNING(MSGID_INOTIFY_NAME_READ_ERR, 1, PMLOGKS(ERRTEXT, err->message),
 				                 "error reading inotify name");
@@ -565,6 +572,8 @@ handle_new_crash(GIOChannel *source, GIOCondition condition, gpointer data)
 
 
 		condition = g_io_channel_get_buffer_condition(source);
+		g_free(name);
+		name = NULL;
 	}
 
 error:
@@ -573,9 +582,7 @@ error:
 	{
 		g_error_free(err);
 	}
-
 	g_free(name);
-
 
 	return TRUE;
 }
